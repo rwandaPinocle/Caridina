@@ -102,6 +102,17 @@ impl Board {
         }
     }
 
+    fn is_empty(&self) -> bool{
+        let mut result = true;
+        for &c in self.squares.iter() {
+            if c != '.' {
+                result = false;
+                break;
+            }
+        }
+        result
+    }
+
     fn make_move(&mut self, mv: &Move) -> Result<Board, BoardError>{
         let mut letters = mv.word
             .chars()
@@ -145,6 +156,9 @@ impl Board {
             0..self.h-1,
             0..self.w-1
         );
+        if self.is_empty() {
+            return self.get_initial_shells();
+        }
         for (dir, len, row, col) in itr {
             let char_vec = match dir {
                 Direction::Right => self.get_row(row),
@@ -168,10 +182,32 @@ impl Board {
                 Direction::Right => col,
                 Direction::Down => row,
             };
+            if starting_idx != 0 && char_vec[starting_idx - 1] != '.'{
+                continue
+            }
             let shell_str = Board::get_shell_from_vec(char_vec, len, starting_idx);
             if shell_str.replace('.', "").len() != 0 {
                 let new_shell = Shell::new(row, col, *dir, shell_str);
                 shells.push(new_shell);
+            }
+        }
+        shells
+    }
+
+    fn get_initial_shells(&self) -> Vec<Shell>{
+        let mut shells: Vec<Shell> = Vec::new();
+        for s_count in 2..8 {
+            for offset in 0..s_count {
+                let mid_row: usize = (self.h - self.h % 2)/2;
+                let mid_col: usize = (self.w - self.w % 2)/2;
+                if (mid_row >= offset) && (mid_row-offset + s_count <= self.h) {
+                    let dshell = Shell::new(mid_row-offset, mid_col, Direction::Down, ".".repeat(s_count));
+                    shells.push(dshell);
+                }
+                if (mid_col >= offset) && (mid_col-offset + s_count <= self.w){
+                    let rshell = Shell::new(mid_row, mid_col-offset, Direction::Right, ".".repeat(s_count));
+                    shells.push(rshell);
+                }
             }
         }
         shells
@@ -219,15 +255,52 @@ impl Board {
         result
     }
 
+    fn is_legal(&self, letters_word_map: &HashMap<String, Vec<String>>) -> bool{
+        for r_idx in 0..self.h {
+            let row = self.get_row(r_idx);
+            if row.iter().filter(|&c| *c != '.').count() == 0 { continue }
+
+            for word in row.iter().join("").split('.') {
+                if word.len() <= 1 { continue }
+                let sorted = word.chars().sorted().join("");
+
+                if let Some(word_vec) = letters_word_map.get(&sorted) {
+					if !word_vec.iter().any(|w| w == word) {
+						return false;
+					}
+                } else {
+					return false;
+				}
+            }
+        }
+        for c_idx in 0..self.w {
+            let col = self.get_col(c_idx);
+            if col.iter().filter(|&c| *c != '.').count() == 0 { continue }
+
+            for word in col.iter().join("").split('.') {
+                if word.len() <= 1 { continue }
+                let sorted = word.chars().sorted().join("");
+
+                if let Some(word_vec) = letters_word_map.get(&sorted) {
+					if !word_vec.iter().any(|w| w == word) {
+						return false;
+					}
+                } else {
+					return false;
+				}
+            }
+        }
+        true
+    }
+
     fn get_moves(
         &self,
         tiles: &Vec<char>,
-        board: Board,
         letters_word_map: &HashMap<String,Vec<String>>
     ) -> Vec<Move> {
 
         // TODO: Eliminate duplicates
-        let shells = board.find_shells();
+        let shells = self.find_shells();
 
         let mut moves: Vec<Move> = Vec::new();
         for shell in shells.iter() {
@@ -340,33 +413,54 @@ fn main() {
         total += value.len() as f64;
     }
 
-    let width: usize = 7;
-    let height: usize = 7;
-    let tiles = vec!['W', 'O', 'R', 'L', 'D'];
+    let width: usize = 30;
+    let height: usize = 30;
+    let tiles = "ORANGE".chars().collect();
 
     // Board is in row major order
     // Origin is top left of board
     let mut board = Board::new(width, height);
+    /*
     let mv = Move {
         word: "HELLO".into(),
-        row: 0,
-        col: 0,
+        row: 6,
+        col: 5,
         direction: Direction::Right,
         mask: ".....".into()
     };
     board = match board.make_move(&mv) {
         Ok(new_board) => new_board,
-        Error => board
+        _ => board
     };
+    let mv = Move {
+        word: "WORLD".into(),
+        row: 7,
+        col: 5,
+        direction: Direction::Right,
+        mask: ".....".into()
+    };
+    board = match board.make_move(&mv) {
+        Ok(new_board) => new_board,
+        _ => board
+    };
+    */
 
-    let moves = board.get_moves(&tiles, board, &letters_word_map);
-    for mv in moves {
-        /*
-        println!("r:{} c:{} {} {}", mv.row, mv.col, mv.word, mv.mask);
-        match board.make_move(&mv) {
-            Ok(board) => {println!("{}", board)},
-            _ => {}
+    loop {
+        let moves = board.get_moves(&tiles, &letters_word_map);
+        let mut legal_moves = Vec::new();
+        for mv in moves.iter() {
+            if let Ok(new_board) = board.make_move(&mv) {
+                let is_legal = new_board.is_legal(&letters_word_map);
+                //println!("{} {}", new_board, is_legal);
+                if is_legal {
+                    legal_moves.push(mv);
+                }
+            };
         }
-        */
+        if legal_moves.len() == 0 { break }
+        if let Ok(new_board) = board.make_move(&legal_moves[legal_moves.len()-1]) {
+            board = new_board;
+            println!("{}", board);
+        }
     }
 }
