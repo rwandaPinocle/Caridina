@@ -2,9 +2,11 @@
 use std::fmt;
 use std::fs;
 use std::collections::HashMap;
+use rand::Rng;
 use failure::{ Error, Fail };
 use itertools::{ iproduct, sorted, enumerate, Itertools };
 use rocket::{ get, ignite };
+
 
 
 const MAX_TILES: i64 = 7;
@@ -101,6 +103,11 @@ impl Board {
             w: board.w,
             h: board.h,
         }
+    }
+
+    fn from_str(board_str: String, w: usize, h: usize) -> Board {
+        let squares: Vec<char> = board_str.chars().collect();
+        Board { squares, w, h }
     }
 
     fn is_empty(&self) -> bool{
@@ -450,6 +457,19 @@ fn build_letter_scores() {
 
 }
 
+
+fn build_score_string(width: usize, height: usize) -> String {
+    let mut result = String::new();
+    let values = ['x', 'd', 'D', 't', 'T'];
+    let mut rng = rand::thread_rng();
+
+    for _ in 0..width*height {
+        let c = values[rng.gen_range(0..values.len())];
+        result.push(c);
+    }
+    result
+}
+
 #[get("/world")]
 fn world() -> &'static str {
     "hello, world!"
@@ -457,21 +477,24 @@ fn world() -> &'static str {
 
 
 fn main() {
+    let width: usize = 30;
+    let height: usize = 30;
+    let tiles = "PINEAPPLE".chars().collect();
+
     // Create wordlist
-    let word_file = fs::read_to_string("Collins Scrabble Words (2019).txt") .expect("Something went wrong reading the file");
+    let word_file = fs::read_to_string("Collins Scrabble Words (2019).txt").expect("Something went wrong reading the file");
     let word_list: Vec<String> = word_file.lines().map(|x: &str| {x.to_string()}).collect();
     let letter_place_map = build_letter_place_map(&word_list);
     let letters_word_map = build_letters_word_map(&word_list);
     //let letter_scores = build_letter_scores();
+    let score_str = build_score_string(width, height);
+    let score_board = Board::from_str(score_str, width, height);
+
 
     let mut total: f64 = 0.0;
     for (idx, (key, value)) in letters_word_map.iter().enumerate() {
         total += value.len() as f64;
     }
-
-    let width: usize = 50;
-    let height: usize = 15;
-    let tiles = "ANDREWP".chars().collect();
 
     // Board is in row major order
     // Origin is top left of board
