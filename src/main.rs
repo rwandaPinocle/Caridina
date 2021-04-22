@@ -26,6 +26,7 @@ impl Move {
     fn new(row: usize, col: usize, direction: Direction, word: String, mask: String) -> Move {
         Move {row, col, direction, word, mask}
     }
+
 }
 
 struct Shell {
@@ -114,7 +115,7 @@ impl Board {
     }
 
     fn make_move(&mut self, mv: &Move) -> Result<Board, BoardError>{
-        let mut letters = mv.word
+        let mut letters_to_place = mv.word
             .chars()
             .zip(mv.mask.chars())
             .filter(|(_, mc)| {*mc == '.'})
@@ -122,7 +123,7 @@ impl Board {
         let mut cur_row = mv.row;
         let mut cur_col = mv.col;
         let mut new_board = Board::from(self);
-        let mut c = match letters.next() {
+        let mut c = match letters_to_place.next() {
             Some(c) => c,
             None => '?',
         };
@@ -136,7 +137,7 @@ impl Board {
                 continue;
             };
             new_board.squares[idx] = c;
-            c = match letters.next() {
+            c = match letters_to_place.next() {
                 Some(c) => c,
                 None => break,
             };
@@ -146,6 +147,50 @@ impl Board {
             }
         }
         Ok(new_board)
+    }
+
+    fn affected_rows_cols(&self, mv: &Move) -> (Vec<usize>, Vec<usize>) {
+        // first return value is row idxs, second is col idxs
+        let mut letters = mv.word
+            .chars()
+            .zip(mv.mask.chars())
+            .filter(|(_, mc)| {*mc == '.'})
+            .map(|(wc, _)| {wc});
+        let mut cur_row = mv.row;
+        let mut cur_col = mv.col;
+        let mut row_idxs = Vec::new();
+        let mut col_idxs = Vec::new();
+        let mut c = match letters.next() {
+            Some(c) => c,
+            None => '?',
+        };
+        loop {
+            let idx = (cur_row * self.w) + cur_col;
+            if self.squares[idx] != '.' {
+                match mv.direction {
+                    Direction::Right => { cur_col += 1; }
+                    Direction::Down => { cur_row += 1; }
+                };
+                continue;
+            };
+            row_idxs.push(cur_row);
+            col_idxs.push(cur_col);
+            //new_board.squares[idx] = c;
+            c = match letters.next() {
+                Some(c) => c,
+                None => break,
+            };
+            
+            if cur_col > self.w || cur_row > self.h {
+                continue;
+            }
+
+            match mv.direction {
+                Direction::Right => { cur_col += 1; }
+                Direction::Down => { cur_row += 1; }
+            };
+        }
+        (row_idxs, col_idxs)
     }
 
     fn find_shells(&self) -> Vec<Shell>{
@@ -255,8 +300,14 @@ impl Board {
         result
     }
 
-    fn is_legal(&self, letters_word_map: &HashMap<String, Vec<String>>) -> bool{
-        for r_idx in 0..self.h {
+    fn is_legal(
+        &self,
+        rows: &Vec<usize>,
+        cols: &Vec<usize>,
+        letters_word_map: &HashMap<String, Vec<String>>
+    ) -> bool
+    {
+        for &r_idx in rows {
             let row = self.get_row(r_idx);
             if row.iter().filter(|&c| *c != '.').count() == 0 { continue }
 
@@ -273,7 +324,7 @@ impl Board {
 				}
             }
         }
-        for c_idx in 0..self.w {
+        for &c_idx in cols {
             let col = self.get_col(c_idx);
             if col.iter().filter(|&c| *c != '.').count() == 0 { continue }
 
@@ -395,6 +446,10 @@ fn build_letters_word_map(words: &Vec<String>) -> HashMap<String, Vec<String>> {
     map
 }
 
+fn build_letter_scores() {
+
+}
+
 #[get("/world")]
 fn world() -> &'static str {
     "hello, world!"
@@ -407,15 +462,16 @@ fn main() {
     let word_list: Vec<String> = word_file.lines().map(|x: &str| {x.to_string()}).collect();
     let letter_place_map = build_letter_place_map(&word_list);
     let letters_word_map = build_letters_word_map(&word_list);
+    //let letter_scores = build_letter_scores();
 
     let mut total: f64 = 0.0;
     for (idx, (key, value)) in letters_word_map.iter().enumerate() {
         total += value.len() as f64;
     }
 
-    let width: usize = 30;
-    let height: usize = 30;
-    let tiles = "ORANGE".chars().collect();
+    let width: usize = 50;
+    let height: usize = 15;
+    let tiles = "ANDREWP".chars().collect();
 
     // Board is in row major order
     // Origin is top left of board
@@ -450,7 +506,8 @@ fn main() {
         let mut legal_moves = Vec::new();
         for mv in moves.iter() {
             if let Ok(new_board) = board.make_move(&mv) {
-                let is_legal = new_board.is_legal(&letters_word_map);
+                let (rows, cols) = board.affected_rows_cols(&mv);
+                let is_legal = new_board.is_legal(&rows, &cols, &letters_word_map);
                 //println!("{} {}", new_board, is_legal);
                 if is_legal {
                     legal_moves.push(mv);
