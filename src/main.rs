@@ -1,15 +1,36 @@
 #![feature(proc_macro_hygiene, decl_macro)]
+
+mod json_types;
+
 use std::fmt;
 use std::fs;
 use std::collections::HashMap;
+use std::sync::mpsc::{ channel, Sender, Receiver};
+use std::thread;
+use std::fs::File;
+use std::io::prelude::*;
 use rand::Rng;
-use failure::{ Error, Fail };
-use itertools::{ iproduct, sorted, enumerate, Itertools };
-use rocket::{ get, ignite };
+use failure::{ Fail };
+use itertools::{ iproduct, sorted, Itertools };
+use rocket::{ get, ignite, post, State, routes};
+use rocket_contrib::json::Json;
+use crate::json_types::{
+    MoveRequest,
+    PlayerInfo,
+    MoveResponse,
+    InitializeRequest,
+    Tile,
+    Letter,
+    ScrabbleWord,
+};
+use std::sync::{Arc, Mutex};
 
 
 
 const MAX_TILES: i64 = 7;
+const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
+const WORD_MAP_FILE: &str = "wordmap.txt";
+const LETTER_VALUE_FILE: &str = "letter_values.txt";
 
 #[derive(Debug, Copy, Clone)]
 enum Direction {
@@ -119,6 +140,37 @@ impl Board {
     }
 
 
+    fn from_tiles(tiles: Vec<Vec<Tile>>) -> Board {
+        let w = tiles[0].len();
+        let h = tiles.len();
+        let mut squares = Vec::new();
+        let mut mults = Vec::new();
+        for row in tiles {
+            for tile in row {
+                let l = if tile.letter == " " {
+                    '.'
+                } else {
+                    match tile.letter.chars().nth(0) {
+                        Some(r) => r,
+                        _ => '.'
+                    }
+                };
+                squares.push(l);
+                let m = match tile.square.as_str() {
+                    "dl" => 'l',
+                    "tl" => 'L',
+                    "dw" => 'w',
+                    "tw" => 'W',
+                    "st" => 's',
+                    _ => '-',
+                };
+                mults.push(m);
+            }
+        }
+        Board { squares, w, h, mults }
+    }
+
+
     fn is_empty(&self) -> bool{
         let mut result = true;
         for &c in self.squares.iter() {
@@ -152,6 +204,7 @@ impl Board {
             Some(c) => c,
             None => '?',
         };
+        let mut letters_placed = 0;
         loop {
             let idx = (cur_row * new_board.w) + cur_col;
             match mv.direction {
@@ -172,6 +225,7 @@ impl Board {
                 continue;
             }
             new_board.squares[idx] = c;
+            letters_placed += 1;
             c = match letters_to_place.next() {
                 Some(c) => c,
                 None => break,
@@ -182,6 +236,9 @@ impl Board {
             }
         }
         move_score *= multiplier;
+        if letters_placed == 7 {
+            move_score += 50;
+        }
         Ok((new_board, move_score))
     }
 
@@ -296,7 +353,7 @@ impl Board {
 
     fn get_row(&self, row_idx: usize) -> Vec<char>{
         let mut row = Vec::<char>::new();
-        for col_idx in 0..self.h {
+        for col_idx in 0..self.w {
             row.push(self.squares[row_idx * self.w + col_idx]);
         }
         row
@@ -312,7 +369,7 @@ impl Board {
 
     fn get_mult_row(&self, row_idx: usize) -> Vec<char>{
         let mut row = Vec::<char>::new();
-        for col_idx in 0..self.h {
+        for col_idx in 0..self.w {
             row.push(self.mults[row_idx * self.w + col_idx]);
         }
         row
@@ -497,6 +554,7 @@ fn build_letters_word_map(words: &Vec<String>) -> HashMap<String, Vec<String>> {
     map
 }
 
+
 fn build_letter_values() -> HashMap<char, usize>{
    let mut ltr_values = HashMap::new();
    let mut rng = rand::thread_rng();
@@ -519,36 +577,72 @@ fn build_score_string(width: usize, height: usize) -> String {
     result
 }
 
-#[get("/world")]
-fn world() -> &'static str {
-    "hello, world!"
+
+
+fn get_random_tiles() -> Vec<char> {
+    let mut result = Vec::<char>::new();
+    let mut rng = rand::thread_rng();
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect::<Vec<char>>();
+    for _ in 0..7 {
+        let idx = rng.gen_range(0..26);
+        result.push(alphabet[idx]);
+    }
+    result
 }
 
 
+
 fn main() {
-    let width: usize = 11;
-    let height: usize = 11;
-    let tiles = "ANDREWPO".chars().collect();
+    let word_list: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let letters_word_map = Mutex::new(HashMap::<String, Vec<String>>::new());
+    let letter_values = Mutex::new(HashMap::<char, usize>::new());
 
-    // Create wordlist
-    let word_file = fs::read_to_string("Collins Scrabble Words (2019).txt").expect("Something went wrong reading the file");
-    let word_list: Vec<String> = word_file.lines().map(|x: &str| {x.to_string()}).collect();
-    let letter_place_map = build_letter_place_map(&word_list);
-    let letters_word_map = build_letters_word_map(&word_list);
-    let letter_values = build_letter_values();
-    let score_str = build_score_string(width, height);
-
-
-    let mut total: f64 = 0.0;
-    for (idx, (key, value)) in letters_word_map.iter().enumerate() {
-        total += value.len() as f64;
+    #[post("/initialize", data="<req>")]
+    fn initialize<'a, 'b>(
+        req: Json<InitializeRequest>,
+        letters_word_map: State<'a, Mutex<HashMap<String, Vec<String>>>>,
+        letter_values: State<'b, Mutex<HashMap<char, usize>>>,
+        ) -> &'static str {
+        let mut letters_word_map = letters_word_map.lock().unwrap();
+        let mut letter_values = letter_values.lock().unwrap();
+        for l in ALPHABET.chars() {
+            match req.letters.get(&l.to_string()) {
+                Some(Letter{ value, n , left}) => {
+                    letter_values.insert(l, *value);
+                 }
+                _ => {continue}
+            }
+        }
+        letters_word_map.clear();
+        for word in req.words.to_vec() {
+            let key: String = sorted(word.chars()).collect::<String>();
+            if let Some(vec) = letters_word_map.get_mut(&key) {
+                vec.push(word.clone());
+            } else {
+                letters_word_map.insert(key, vec![word.clone()]);
+            };
+        }
+        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars() {
+            let value = match req.letters.get(&c.to_string()) {
+                Some(r) => r.value,
+                _ => 1,
+            };
+            letter_values.insert(c, value);
+        }
+        "Ok"
     }
 
-    // Board is in row major order
-    // Origin is top left of board
-    let mut board = Board::new(width, height, score_str);
-
-    loop {
+    #[post("/makeMove", data="<req>")]
+    fn makeMove<'a, 'b>(
+        req: Json<MoveRequest>,
+        letters_word_map: State<'a, Mutex<HashMap<String, Vec<String>>>>,
+        letter_values: State<'b, Mutex<HashMap<char, usize>>>,
+        ) -> Json<MoveResponse> {
+        let mut letters_word_map = letters_word_map.lock().unwrap();
+        let mut letter_values = letter_values.lock().unwrap();
+        let board = Board::from_tiles(req.board.to_vec());
+        let tiles = req.letters.to_vec();
+        println!("tiles: {}", tiles.iter().join(","));
         let mut best_score = 0;
         let mut best_board = board.clone();
         let moves = board.get_moves(&tiles, &letters_word_map);
@@ -556,15 +650,43 @@ fn main() {
             if let Ok((new_board, move_score)) = board.make_move(&mv, &letter_values) {
                 let (rows, cols) = board.affected_rows_cols(&mv);
                 let is_legal = new_board.is_legal(&rows, &cols, &letters_word_map);
-                //println!("{} {}", new_board, is_legal);
                 if is_legal && best_score < move_score {
                     best_score = move_score;
                     best_board = new_board;
                 }
             }
         }
-        board = best_board;
-        if best_score == 0 { break }
-        println!("{}", board);
+        let bank = if best_score == 0 {
+            vec![0,1,2,3,4,5,6]
+        } else {
+            vec![]
+        };
+        let mut board_json = Vec::new();
+        for row_idx in 0..best_board.h {
+            let mut row_json = Vec::new();
+            let row_letters = best_board.get_row(row_idx);
+            let row_mults = best_board.get_mult_row(row_idx);
+            for (letter, mult) in row_letters.iter().zip(row_mults) {
+                let mult = match mult {
+                    'l' => "dl".to_string(),
+                    'L' => "tl".to_string(),
+                    'w' => "dw".to_string(),
+                    'W' => "tw".to_string(),
+                    's' => "st".to_string(),
+                    _ => " ".to_string()
+                };
+                let letter_c = if letter == &'.' { "".to_string() } else { letter.to_string() };
+                row_json.push(Tile{square: mult, letter: letter_c});
+            }
+            board_json.push(row_json);
+        }
+        println!("BEST MOVE:\n{}", best_board);
+        Json(MoveResponse { bank, board: board_json })
     }
+
+    rocket::ignite()
+        .manage(word_list)
+        .manage(letters_word_map)
+        .manage(letter_values)
+        .mount("/", routes![initialize, makeMove]).launch();
 }
