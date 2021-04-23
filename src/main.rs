@@ -78,6 +78,7 @@ struct Board {
     squares: Vec::<char>,
     w: usize,
     h: usize,
+    mults: Vec::<char>,
 }
 
 #[derive(Fail, Debug)]
@@ -85,14 +86,25 @@ struct Board {
 struct BoardError(String);
 
 impl Board {
-    fn new(width: usize, height: usize) -> Board {
+    fn new(width: usize, height: usize, score_str: String) -> Board {
         let mut board = Board {
             squares: Vec::<char>::new(),
             w: width,
             h: height,
+            mults: score_str.chars().collect(),
         };
         for _ in 0..(width*height) {
             board.squares.push('.');
+        };
+        board
+    }
+
+    fn clone(&self) -> Board {
+        let mut board = Board {
+            squares: self.squares.to_vec(),
+            w: self.w,
+            h: self.h,
+            mults: self.mults.to_vec(),
         };
         board
     }
@@ -102,13 +114,10 @@ impl Board {
             squares: board.squares.to_vec(),
             w: board.w,
             h: board.h,
+            mults: board.mults.to_vec(),
         }
     }
 
-    fn from_str(board_str: String, w: usize, h: usize) -> Board {
-        let squares: Vec<char> = board_str.chars().collect();
-        Board { squares, w, h }
-    }
 
     fn is_empty(&self) -> bool{
         let mut result = true;
@@ -121,7 +130,12 @@ impl Board {
         result
     }
 
-    fn make_move(&mut self, mv: &Move) -> Result<Board, BoardError>{
+    fn make_move(
+        &self,
+        mv: &Move,
+        letter_values: &HashMap<char, usize>
+    ) -> Result<(Board, usize), BoardError> {
+
         let mut letters_to_place = mv.word
             .chars()
             .zip(mv.mask.chars())
@@ -129,6 +143,10 @@ impl Board {
             .map(|(wc, _)| {wc});
         let mut cur_row = mv.row;
         let mut cur_col = mv.col;
+
+        let mut move_score = 0;
+        let mut multiplier = 1;
+
         let mut new_board = Board::from(self);
         let mut c = match letters_to_place.next() {
             Some(c) => c,
@@ -140,9 +158,19 @@ impl Board {
                 Direction::Right => { cur_col += 1; }
                 Direction::Down => { cur_row += 1; }
             };
-            if new_board.squares[idx] != '.' {
+            if new_board.squares[idx] == '.' {
+                match self.mults[idx] {
+                    'w' => { multiplier *= 2 }
+                    'W' => { multiplier *= 3 }
+                    'l' => { move_score +=  letter_values[&c] * 2}
+                    'L' => { move_score +=  letter_values[&c] * 3}
+                    '-' => { move_score += letter_values[&c] }
+                    _ => {}
+                }
+            } else {
+                move_score += letter_values[&c];
                 continue;
-            };
+            }
             new_board.squares[idx] = c;
             c = match letters_to_place.next() {
                 Some(c) => c,
@@ -153,7 +181,8 @@ impl Board {
                 return Err(BoardError("Not enough space for word".into()));
             }
         }
-        Ok(new_board)
+        move_score *= multiplier;
+        Ok((new_board, move_score))
     }
 
     fn affected_rows_cols(&self, mv: &Move) -> (Vec<usize>, Vec<usize>) {
@@ -281,6 +310,23 @@ impl Board {
         col
     }
 
+    fn get_mult_row(&self, row_idx: usize) -> Vec<char>{
+        let mut row = Vec::<char>::new();
+        for col_idx in 0..self.h {
+            row.push(self.mults[row_idx * self.w + col_idx]);
+        }
+        row
+    }
+
+    fn get_mult_col(&self, col_idx: usize) -> Vec<char>{
+        let mut col = Vec::<char>::new();
+        for row_idx in 0..self.h {
+            col.push(self.mults[row_idx * self.w + col_idx]);
+        }
+        col
+    }
+
+
     fn get_shell_from_vec(
         char_vec: Vec<char>,
         space_count: usize,
@@ -356,8 +402,6 @@ impl Board {
         tiles: &Vec<char>,
         letters_word_map: &HashMap<String,Vec<String>>
     ) -> Vec<Move> {
-
-        // TODO: Eliminate duplicates
         let shells = self.find_shells();
 
         let mut moves: Vec<Move> = Vec::new();
@@ -453,14 +497,19 @@ fn build_letters_word_map(words: &Vec<String>) -> HashMap<String, Vec<String>> {
     map
 }
 
-fn build_letter_scores() {
-
+fn build_letter_values() -> HashMap<char, usize>{
+   let mut ltr_values = HashMap::new();
+   let mut rng = rand::thread_rng();
+   for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars() {
+       ltr_values.insert(c, rng.gen_range(0..10));
+   }
+   ltr_values
 }
 
 
 fn build_score_string(width: usize, height: usize) -> String {
     let mut result = String::new();
-    let values = ['x', 'd', 'D', 't', 'T'];
+    let values = ['-', 'w', 'W', 'l', 'L'];
     let mut rng = rand::thread_rng();
 
     for _ in 0..width*height {
@@ -477,18 +526,17 @@ fn world() -> &'static str {
 
 
 fn main() {
-    let width: usize = 30;
-    let height: usize = 30;
-    let tiles = "PINEAPPLE".chars().collect();
+    let width: usize = 11;
+    let height: usize = 11;
+    let tiles = "ANDREWPO".chars().collect();
 
     // Create wordlist
     let word_file = fs::read_to_string("Collins Scrabble Words (2019).txt").expect("Something went wrong reading the file");
     let word_list: Vec<String> = word_file.lines().map(|x: &str| {x.to_string()}).collect();
     let letter_place_map = build_letter_place_map(&word_list);
     let letters_word_map = build_letters_word_map(&word_list);
-    //let letter_scores = build_letter_scores();
+    let letter_values = build_letter_values();
     let score_str = build_score_string(width, height);
-    let score_board = Board::from_str(score_str, width, height);
 
 
     let mut total: f64 = 0.0;
@@ -498,49 +546,25 @@ fn main() {
 
     // Board is in row major order
     // Origin is top left of board
-    let mut board = Board::new(width, height);
-    /*
-    let mv = Move {
-        word: "HELLO".into(),
-        row: 6,
-        col: 5,
-        direction: Direction::Right,
-        mask: ".....".into()
-    };
-    board = match board.make_move(&mv) {
-        Ok(new_board) => new_board,
-        _ => board
-    };
-    let mv = Move {
-        word: "WORLD".into(),
-        row: 7,
-        col: 5,
-        direction: Direction::Right,
-        mask: ".....".into()
-    };
-    board = match board.make_move(&mv) {
-        Ok(new_board) => new_board,
-        _ => board
-    };
-    */
+    let mut board = Board::new(width, height, score_str);
 
     loop {
+        let mut best_score = 0;
+        let mut best_board = board.clone();
         let moves = board.get_moves(&tiles, &letters_word_map);
-        let mut legal_moves = Vec::new();
         for mv in moves.iter() {
-            if let Ok(new_board) = board.make_move(&mv) {
+            if let Ok((new_board, move_score)) = board.make_move(&mv, &letter_values) {
                 let (rows, cols) = board.affected_rows_cols(&mv);
                 let is_legal = new_board.is_legal(&rows, &cols, &letters_word_map);
                 //println!("{} {}", new_board, is_legal);
-                if is_legal {
-                    legal_moves.push(mv);
+                if is_legal && best_score < move_score {
+                    best_score = move_score;
+                    best_board = new_board;
                 }
-            };
+            }
         }
-        if legal_moves.len() == 0 { break }
-        if let Ok(new_board) = board.make_move(&legal_moves[legal_moves.len()-1]) {
-            board = new_board;
-            println!("{}", board);
-        }
+        board = best_board;
+        if best_score == 0 { break }
+        println!("{}", board);
     }
 }
