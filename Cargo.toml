@@ -22,3 +22,7 @@ features = ["json"]
 [profile.dev]
 opt-level = 3
 
+
+[staging]
+address = "0.0.0.0"
+
