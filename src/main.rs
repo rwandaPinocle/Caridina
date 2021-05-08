@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use rand::Rng;
 use failure::{ Error, Fail };
 use itertools::{ iproduct, sorted, enumerate, Itertools };
-use rocket::{ get, ignite };
 
 
 
@@ -519,16 +518,11 @@ fn build_score_string(width: usize, height: usize) -> String {
     result
 }
 
-#[get("/world")]
-fn world() -> &'static str {
-    "hello, world!"
-}
-
 
 fn main() {
-    let width: usize = 11;
-    let height: usize = 11;
-    let tiles = "ANDREWPO".chars().collect();
+    let width: usize = 65;
+    let height: usize = 65;
+    let tiles = "PINEAPPLE".chars().collect();
 
     // Create wordlist
     let word_file = fs::read_to_string("Collins Scrabble Words (2019).txt").expect("Something went wrong reading the file");
